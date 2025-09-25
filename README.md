@@ -1,4 +1,3 @@
-
 # MultiDroneUnc Simulator
 
 The `MultiDroneUnc` class provides a simple, self-contained MDP formulation for multiple drones operating in a bounded 3D grid with static obstacles and goal regions, while being subject to uncertainties in the outcome of actions. The drones can take actions to move to one of their adjacent cells: If drones are not allowed to change their altitude, each drone can move to one of its `8` neighbor cells in the XY-plane (up, down, left, right, and diagonals). Otherwise, each drone can move to one of its `26` neighbors in 3D space (all adjacent cells except staying in place).
@@ -15,19 +14,19 @@ The following Python libraries are required:
 ### Defining environments
 To use the ```MultiDroneUnc``` class in ```multi_drone.py``` we have to define a 3D grid environment and set the MDP model parameters.  This is defined in a YAML file, for example ```environment.yaml```. It consists of the following parameters:
 
-- grid_size: The size of the 3D grid, i.e., the number of cells in each XYZ dimension
-- start_positions: The start position of each drones
-- goal_positions: The goal position of each drone 
-- obstacle_cells: A list of cells inside the grid that are considered obstacles
-- change_altitude: A boolean that indicates whether drones are allowed to change their altitudes
+- `grid_size`: The size of the 3D grid, i.e., the number of cells in each XYZ dimension
+- `start_positions`: The start position of each drones
+- `goal_positions`: The goal position of each drone 
+- `obstacle_cells`: A list of cells inside the grid that are considered obstacles
+- `change_altitude`: A boolean that indicates whether drones are allowed to change their altitudes
 
 The MDP model parameters are the following:
 
-- ```step_cost```: A penalty the drones receive at every step
-- ```collision_penalty```: The penality a drone receives upon colliding with an obstacle cell
-- ```goal_reward```: The reward a drone receives when reaching its goal
-- ```max_num_step```: The maximum number of steps before a run terminates
-- ```alpha```: Action uncertainty parameter (see [Action uncertainty parameter alpha](#action-uncertainty-parameter-alpha)) 
+- `step_cost`: A penalty the drones receive at every step
+- `collision_penalty`: The penality a drone receives upon colliding with an obstacle cell
+- `goal_reward`: The reward a drone receives when reaching its goal
+- `max_num_step`: The maximum number of steps before a run terminates
+- `alpha`: Action uncertainty parameter (see [Action uncertainty parameter alpha](#action-uncertainty-parameter-alpha)) 
 
 An example of a yaml configuration file is provided in ```example_environment.yaml```:
 ```
