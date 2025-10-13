@@ -1,5 +1,6 @@
 import math
 import random
+import time
 
 import numpy as np
 
@@ -30,7 +31,7 @@ def Get_Available_Actions(state):
     return list(range(env.num_actions))
 
 
-def MCTS(initial_state, num_iterations=100):
+def MCTS(initial_state, num_iterations=20):
     # Create the root node
     root_node = CreateNode(initial_state)
 
@@ -63,7 +64,7 @@ def SelectNode(node):
 
 
 # Select a child node using UCB
-def SelectChildUCB(parent_node, c_param=0.5):
+def SelectChildUCB(parent_node, c_param=0.8):
     # Initialise
     best_child = None
     best_value = -float('inf')
@@ -75,7 +76,7 @@ def SelectChildUCB(parent_node, c_param=0.5):
     for child in parent_node.children:
         # If the number of visits of the child node is 0, assign a huge value to encourage exploration
         if child.visits == 0:
-            ucb_value = 1e6
+            ucb_value = 1000 + c_param * math.sqrt(math.log(parent_visits) / child.visits)
         else:
             # UCB formula: argmaxQ(s,a) + c*sqrt(ln(n(s))/n(s,a))
             exploitation = child.total_reward / child.visits
@@ -106,7 +107,7 @@ def Expand(node):
     action = node.untried_actions.pop(index)
 
     # Simulate it in the environment
-    next_state, reward, done, info = env.simulate(node.state, action)
+    next_state, _, _, _ = env.simulate(node.state, action)
 
     # Create a new child node
     new_node = CreateNode(next_state, parent=node, action=action)
@@ -117,8 +118,8 @@ def Expand(node):
     return new_node
 
 
-# Choss an action that gets the drone closer to the goal without any collision
-def HeuristicAction(state, num_candidates=26, samples=5):
+# Choose an action that gets the drone closer to the goal without any collision
+def HeuristicAction(state, samples):
 
     # Goal position of all drones
     cfg = env.get_config()
@@ -127,26 +128,23 @@ def HeuristicAction(state, num_candidates=26, samples=5):
     # All possible actions
     all_actions = list(range(env.num_actions))
 
-    # Select candidate actions
-    if (num_candidates is None) or (num_candidates >= len(all_actions)):
-        candidates = all_actions
-    else:
-        candidates = random.sample(all_actions, num_candidates)
+    obstacles = np.array(cfg.obstacle_cells)
 
     # Calculate the current position and distance to goals
     cur_pos = state[:,:3]
-    cur_dist = np.array([np.linalg.norm(cur_pos[i] - goals[i]) for i in range(len(goals))])
+    cur_dist = np.linalg.norm(cur_pos - goals, axis=1)
 
     # Set the default action
-    best_action = candidates[0] if candidates else all_actions[0]
+    best_action = all_actions[0]
     # Set the initial value
     best_score = -float('inf')
-    for action in candidates:
+
+    for action in all_actions:
         score_sum = 0.0
 
         # Repeat simulate a few times to average out random effects
         for _ in range(samples):
-            next_state, reward, done, info = env.simulate(state, action)
+            next_state, _, _, info = env.simulate(state, action)
 
             # Drones will move within the grid
             grid_x, grid_y, grid_z = env.get_config().grid_size
@@ -156,60 +154,70 @@ def HeuristicAction(state, num_candidates=26, samples=5):
 
             # Calculate the distance between the current position and the goal
             next_pos = next_state[:, :3]
-            next_dist = np.array([np.linalg.norm(next_pos[i] - goals[i]) for i in range(len(goals))])
+            next_dist = np.linalg.norm(next_pos - goals, axis=1)
 
             # Calculate how much each drone has moved closer to its goal
             delta = cur_dist - next_dist
-            delta_pos = np.maximum(delta, 0.0)
+            progress = np.mean(np.clip(delta, 0, None))
 
-            # Average progress and the slowest progress
-            team_progress = np.mean(delta_pos)
-            worst_progress = np.min(delta_pos)
+            # Give a reward when the drone gets closer to the goal
+            near_goal_bonus = np.sum(next_dist < 1.0) * 25.0
+            reach_bonus = np.sum(next_dist < 0.1) * 2000
 
-            # Check if there is a collision
-            num_collisions = info.get("num_collisions", 0)
-            num_vehicle_collisions = info.get("num_vehicle_collisions", 0)
+            direction_to_goal = goals - cur_pos
+            next_direction = next_pos - cur_pos
+            alignment = np.mean(
+                np.sum(direction_to_goal * next_direction, axis=1)
+                / (np.linalg.norm(direction_to_goal, axis=1) * np.linalg.norm(next_direction, axis=1) + 1e-6)
+            )
+            alignment_bonus = 30.0 * alignment if np.mean(cur_dist) > 1.5 else 0.0
 
-            # Apply a strong penalty if any collision occurs
-            safety_penalty = 0.0
-            if(num_collisions > 0) or (num_vehicle_collisions > 0):
-                safety_penalty = -10000.0
 
-            # Give a reward if the drones get closer to their goals
-            proximity = np.sum(1.0 / (1.0 + next_dist)) * 10.0
+            # Calculate the collision penalty
+            num_coll = info.get("num_collisions", 0)
+            num_vcoll = info.get("num_vehicle_collisions", 0)
+            collision_penalty = -30000 * (num_coll + num_vcoll)
 
-            # Give a reward if a drone actually reaches its goal
-            reach_bonus = 0.0
-            for d in next_dist:
-                if d < 0.5: # Inside the goal
-                    reach_bonus += cfg.goal_reward * 5.0
-                elif d < 1.5: # Close to goal
-                    reach_bonus += cfg.goal_reward * 0.1
-                else:
-                    reach_bonus += 0.0
+            # Gives a penalty when the drone gets close to an obstacles
+            near_obstacle_penalty = 0
+            for drone_pos in next_pos:
+                dist = np.linalg.norm(obstacles - drone_pos, axis=1)
+                min_dist = np.min(dist)
+                if min_dist < 1.0:
+                    near_obstacle_penalty -= 15000 * (1.0 - min_dist)
+                elif min_dist < 2.0:
+                    near_obstacle_penalty -= 4000 * (2.0 - min_dist)
 
-            # Detect if any drone has reached its goal and give a large reward
-            goal_reached = [np.linalg.norm(next_pos[i] - goals[i]) < 0.5 for i in range(len(goals))]
-            if any(goal_reached):
-                sample_score = cfg.goal_reward * 10.0
+            # Gives a penalty when drones get close to each other
+            drone_collision_penalty = 0
+            num_drones = len(next_pos)
+            for i in range(num_drones):
+                for j in range(i + 1, num_drones):
+                    dist = np.linalg.norm(next_pos[i] - next_pos[j])
+                    if dist < 1.0:
+                        drone_collision_penalty -= 20000 * (1.0 - dist)
+                    elif dist < 2.0:
+                        drone_collision_penalty -= 6000 * (2.0 - dist)
+
 
             # otherwise, use the heuristic combination
-            else:
-                sample_score = (
-                    20.0 * team_progress
-                    + 10.0 * worst_progress
-                    + proximity
-                    + reach_bonus
-                    + safety_penalty
+            sample_score = (
+                20.0 * progress
+                + alignment_bonus
+                + near_goal_bonus
+                + reach_bonus
+                + collision_penalty
+                + near_obstacle_penalty
+                + drone_collision_penalty
                 )
             score_sum += sample_score
 
         # Get the average over all samples for this action
-        final_score = score_sum / samples
+        avg_score = score_sum / samples
 
         # Update the best score and the best action
-        if final_score > best_score:
-            best_score = final_score
+        if avg_score > best_score:
+            best_score = avg_score
             best_action = action
 
     return best_action
@@ -220,17 +228,21 @@ def Simulate(node):
     # Starts from the current node
     current_state = node.state
     total_reward = 0
-    cfg = env.get_config()
 
     # Add a limit
-    max_rollout = 5
+    max_rollout = 10
 
     for _ in range(max_rollout):
         # Choose action with heuristic
-        action = HeuristicAction(current_state, num_candidates=8, samples=3)
+        action = HeuristicAction(current_state, samples=2)
 
         # Simulate that action in the environment
         next_state, reward, done, info = env.simulate(current_state, action)
+
+        # Stop when collision occurs
+        if info.get("num_collisions") or info.get("num_vehicle_collisions"):
+            total_reward = -5000
+            break
 
         total_reward += reward
         current_state = next_state
@@ -274,11 +286,24 @@ def BestAction(root_node):
 
 
 class MyPlanner:
-    def __init__(self, env, c_param = 0.5):
+    def __init__(self, env, c_param = 0.8):
         self.env = env
         self.c_param = c_param
 
-    def plan(self, current_state, planning_time_per_step=1.0):
+    def plan(self, current_state, planning_time_per_step:float):
         global env
         env = self.env
-        return MCTS(current_state)
+
+        start_time = time.time()
+        best_action = None
+        best_value = -float('inf')
+
+        while time.time() - start_time < planning_time_per_step:
+            action = MCTS(current_state)
+            next_state, reward, done, info = env.simulate(current_state, action)
+
+            if reward > best_value:
+                best_value = reward
+                best_action = action
+
+        return best_action
