@@ -282,7 +282,12 @@ class MultiDroneUnc:
 
         # Create a dummy box actor that defines the bounds
         bounds = [0, X*vs, 0, Y*vs, 0, Z*vs]
-        axes = Axes(bounds, xtitle="X", ytitle="Y", ztitle="Z")
+        axes = dict(
+            xrange=(bounds[0], bounds[1]),
+            yrange=(bounds[2], bounds[3]),
+            zrange=(bounds[4], bounds[5]),
+            xygrid=True,
+        )
 
         self._plotter.show(
             *self._obstacle_meshes, *self._goal_meshes,
@@ -311,6 +316,8 @@ class MultiDroneUnc:
 
             # update trajectory: always keep as Line
             old_pts = self._traj_lines[i].points
+            old_pts = old_pts() if callable(old_pts) else old_pts
+
             new_pts = np.vstack([old_pts, pos])
             self._plotter.remove(self._traj_lines[i])
             self._traj_lines[i] = Line(new_pts).c("blue").lw(2)
