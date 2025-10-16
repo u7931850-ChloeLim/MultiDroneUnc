@@ -14,15 +14,17 @@ class FakePlotter:
 class FakeAxes:
     def __init__(self, *args, **kwargs): pass
 
+# Disables visualisation
 vedo.Plotter = FakePlotter
-vedo.Axes = FakeAxes  # ✅ 추가!
+vedo.Axes = FakeAxes
 
 import os
 import numpy as np
+import glob
+import argparse
 from scipy import stats
 from multi_drone import MultiDroneUnc
 from mcts_planner import MyPlanner
-from run_u7931850 import run  # run(env, planner, planning_time_per_step) 함수 재사용
 
 
 # Compute the mean and confidence interval for the values
@@ -33,28 +35,49 @@ def compute_confidence(data, confidence=0.95):
     margin = std_err * stats.t.ppf((1 + confidence) / 2., n - 1)
     return mean, margin
 
+def run(env, planner, planning_time_per_step=1.0):
+    current_state = env.reset()
+    num_steps = 0
+    total_discounted_reward = 0.0
+    history = []
+
+    while True:
+        action = planner.plan(current_state, planning_time_per_step)
+        next_state, reward, done, info = env.step(action)
+        total_discounted_reward += (env.get_config().discount_factor ** num_steps) * reward
+        history.append((current_state, action, reward, next_state, done, info))
+        current_state = next_state
+        num_steps += 1
+        if done or num_steps >= env.get_config().max_num_steps:
+            break
+    return total_discounted_reward, history
+
 
 # Main simulation runner
 def main():
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, required=False, help="Path to the yaml configuration file")
+    args = parser.parse_args()
+
     planning_time_per_step = 1.0
     num_runs = 20
 
-    selected_files = [
-        "C:/Users/ABC/PycharmProjects/MultiDroneUnc/drone_1.yaml",
-        "C:/Users/ABC/PycharmProjects/MultiDroneUnc/drone_2.yaml",
-        "C:/Users/ABC/PycharmProjects/MultiDroneUnc/drone_3.yaml",
-        "C:/Users/ABC/PycharmProjects/MultiDroneUnc/drone_4.yaml",
-        "C:/Users/ABC/PycharmProjects/MultiDroneUnc/drone_5.yaml",
-    ]
+    # If a specific config is given, use it
+    if args.config:
+        selected_files = [args.config]
+    else:
+        # Otherwise, auto-search for all drone_*.yaml files in the same folder
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        selected_files = sorted(glob.glob(os.path.join(base_dir, "drone_*.yaml")))
+
+    if not selected_files:
+        print("No YAML files found")
+        return
 
     # Loop over each file
     for config_path in selected_files:
-        if not os.path.exists(config_path):
-            print(f" {config_path} not found!")
-            continue
-
-        print(f"\n Running simulation on: {config_path}")
+        print(f"\n Running simulation on: {os.path.basename(config_path)}")
         rewards = []
         successes = []
 
